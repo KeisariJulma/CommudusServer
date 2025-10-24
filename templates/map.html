@@ -1,52 +1,71 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>Live Devices Map</title>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <style>
-    html, body, #map { height: 100%; margin: 0; padding: 0; }
-  </style>
+    <title>Real-Time GPS Map</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.5/dist/leaflet.css"
+          integrity="sha256-sA+M3P1Q1+GGw6TZq6Cj+pzA0K1w5Hjkh4U9qkGh0TM=" crossorigin=""/>
+
+    <style>
+        html, body, #map { height: 100%; margin: 0; padding: 0; }
+    </style>
 </head>
 <body>
-  <div id="map"></div>
-  <script>
-    const map = L.map('map').setView([0, 0], 2);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19
-    }).addTo(map);
+    <div id="map"></div>
 
-    const markers = {};
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.5/dist/leaflet.js"
+            integrity="sha256-nPLb0Ahtc5C9iKpH5LoI/tqoxI4Yc9V3do1p+Z9N0kM=" crossorigin=""></script>
 
-    // Listen to the SSE stream
-    const evtSource = new EventSource("/stream");
-    evtSource.onmessage = function(event) {
-      const devices = JSON.parse(event.data);
+    <script>
+        const map = L.map('map').setView([0, 0], 2);
 
-      // Remove old markers
-      for (let id in markers) {
-        if (!devices[id]) {
-          map.removeLayer(markers[id]);
-          delete markers[id];
-        }
-      }
+        // OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
 
-      // Add/update markers
-      for (let id in devices) {
-        const d = devices[id];
-        if (d.lat && d.lon) {
-          if (!markers[id]) {
-            markers[id] = L.marker([d.lat, d.lon])
-              .addTo(map)
-              .bindPopup(`<b>${d.name}</b><br>Heading: ${d.heading ?? "?"}°`);
-          } else {
-            markers[id].setLatLng([d.lat, d.lon]);
-            markers[id].getPopup().setContent(`<b>${d.name}</b><br>Heading: ${d.heading ?? "?"}°`);
-          }
-        }
-      }
-    };
-  </script>
+        const markers = {};
+
+        const evtSource = new EventSource("/stream");
+
+        evtSource.onmessage = function(event) {
+            const devices = JSON.parse(event.data);
+
+            // Remove stale markers
+            for (let id in markers) {
+                if (!devices[id]) {
+                    map.removeLayer(markers[id]);
+                    delete markers[id];
+                }
+            }
+
+            // Add or update markers
+            for (let id in devices) {
+                const d = devices[id];
+                if (d.lat != null && d.lon != null) {
+                    if (!markers[id]) {
+                        markers[id] = L.marker([d.lat, d.lon])
+                            .addTo(map)
+                            .bindPopup(`<b>${d.name}</b><br>Heading: ${d.heading ?? "?"}°`);
+                    } else {
+                        markers[id].setLatLng([d.lat, d.lon]);
+                        markers[id].getPopup().setContent(`<b>${d.name}</b><br>Heading: ${d.heading ?? "?"}°`);
+                    }
+                }
+            }
+
+            // Optional: auto-center on first device
+            const deviceKeys = Object.keys(devices);
+            if (deviceKeys.length > 0) {
+                const first = devices[deviceKeys[0]];
+                map.setView([first.lat, first.lon], 15);
+            }
+        };
+    </script>
 </body>
 </html>
