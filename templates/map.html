@@ -7,17 +7,16 @@
 <style>
   html, body, #map { margin: 0; padding: 0; height: 100%; width: 100%; }
   .marker {
-    width: 24px;
-    height: 24px;
+    width: 20px;
+    height: 20px;
     border-radius: 50%;
     background-color: purple;
     border: 2px solid white;
     text-align: center;
-    line-height: 24px;
+    line-height: 20px;
     color: white;
-    font-size: 12px;
+    font-size: 10px;
     font-weight: bold;
-    cursor: pointer;
   }
 </style>
 <link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
@@ -47,15 +46,15 @@ const map = new maplibregl.Map({
   zoom: 2
 });
 
+// Store markers for devices
 const markers = {};
-const bounds = new maplibregl.LngLatBounds();
 
-// Connect to SSE for live updates
+// Connect to server via SSE
 const evtSource = new EventSource('/stream');
 evtSource.onmessage = function(event) {
   const devices = JSON.parse(event.data);
 
-  // Remove stale markers
+  // Remove markers for devices that disappeared
   for (let id in markers) {
     if (!devices[id]) {
       markers[id].remove();
@@ -64,37 +63,31 @@ evtSource.onmessage = function(event) {
   }
 
   // Add/update markers
-  bounds.clear();
   for (let id in devices) {
     const dev = devices[id];
     const coords = [dev.lon, dev.lat];
-    if (!coords[0] || !coords[1]) continue;
+    if (coords[0] == null || coords[1] == null) continue;
 
     let marker = markers[id];
     if (!marker) {
       const el = document.createElement('div');
       el.className = 'marker';
-      el.innerText = dev.name[0] || id[0]; // first letter
+      el.innerText = dev.name[0] || id[0]; // First letter as label
       marker = new maplibregl.Marker(el)
         .setLngLat(coords)
-        .setPopup(new maplibregl.Popup({ offset: 25 })
-          .setHTML(`<b>${dev.name}</b><br>Heading: ${dev.heading ?? "?"}°`))
         .addTo(map);
       markers[id] = marker;
     } else {
-      // Smoothly move marker
       marker.setLngLat(coords);
-      if (marker.getPopup()) {
-        marker.getPopup().setHTML(`<b>${dev.name}</b><br>Heading: ${dev.heading ?? "?"}°`);
-      }
     }
-
-    bounds.extend(coords);
   }
 
-  // Fit map to all devices if any exist
-  if (Object.keys(devices).length > 0) {
-    map.fitBounds(bounds, { padding: 100, maxZoom: 16, animate: true });
+  // Optional: auto-center on first device
+  const keys = Object.keys(devices);
+  if (keys.length > 0) {
+    const first = devices[keys[0]];
+    map.setCenter([first.lon, first.lat]);
+    map.setZoom(15);
   }
 };
 </script>

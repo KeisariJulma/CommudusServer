@@ -1,10 +1,8 @@
 from flask import Flask, request, jsonify, render_template, Response
 import time
 import json
-from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # allow cross-origin requests for testing from other devices
 
 # Device timeout in seconds
 DEVICE_TIMEOUT = 30
@@ -17,7 +15,7 @@ devices = {}
 def receive_location():
     data = request.json
     device_id = data.get("device", "unknown-device")
-    name = data.get("name", device_id)
+    name = data.get("name", device_id)  # device name
     timestamp = time.time()
 
     devices[device_id] = {
@@ -56,8 +54,8 @@ def stream():
 
 @app.route("/map")
 def show_map():
-    return render_template("map.html")
+    return render_template("map.html")  # your map.html will connect to /stream
 
 if __name__ == "__main__":
-    print("🌍 Real-Time GPS server running on port 5000...")
+    print("🌍 Real-Time GPS server running...")
     app.run(host="0.0.0.0", port=5000, debug=True)
