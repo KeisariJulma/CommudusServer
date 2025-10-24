@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Real-Time Device Map</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+</head>
+<body>
+
+<div id="map" style="width:100%; height:100vh;"></div>
+
+<script>
+const map = L.map("map").setView([0,0], 2);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+let markers = {};
+
+const source = new EventSource("/stream");
+source.onmessage = (event) => {
+    const devices = JSON.parse(event.data);
+
+    for (const id in devices) {
+        const d = devices[id];
+
+        if (!markers[id]) {
+            markers[id] = L.marker([d.lat, d.lon]).addTo(map)
+                .bindPopup(`📱 ${id}`);
+        } else {
+            markers[id].setLatLng([d.lat, d.lon]);
+        }
+    }
+};
+</script>
+
+</body>
+</html>
