@@ -30,34 +30,17 @@
 <div id="map"></div>
 
 <script>
-  // Initialize map
+  // Load MapLibre map using a valid OSM style JSON
   const map = new maplibregl.Map({
     container: 'map',
-    style: {
-      version: 8,
-      sources: {
-        osm: {
-          type: 'raster',
-          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-          tileSize: 256
-        }
-      },
-      layers: [{
-        id: 'osm',
-        type: 'raster',
-        source: 'osm'
-      }]
-    },
+    style: 'https://demotiles.maplibre.org/style.json', // ✅ valid style
     center: [0, 0],
     zoom: 2
   });
 
   const markers = {};
-
-  // Remove devices not updated in last 10 seconds
   const MAX_AGE_MS = 10000;
 
-  // Connect to SSE stream
   const evtSource = new EventSource("/stream");
   evtSource.onmessage = function(event) {
     const data = JSON.parse(event.data);
@@ -65,14 +48,13 @@
 
     // Remove old markers
     for (const id in markers) {
-      const markerInfo = markers[id].lastUpdated;
-      if (now - markerInfo > MAX_AGE_MS) {
+      if (now - markers[id].lastUpdated > MAX_AGE_MS) {
         markers[id].marker.remove();
         delete markers[id];
       }
     }
 
-    // Update/add markers
+    // Add/update markers
     for (const id in data) {
       const dev = data[id];
       if (!dev.lat || !dev.lon) continue;
