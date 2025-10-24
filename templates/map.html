@@ -1,80 +1,87 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Real-Time Device Map</title>
-<script src="https://unpkg.com/maplibre-gl@2.6.1/dist/maplibre-gl.js"></script>
-<link
-  href="https://unpkg.com/maplibre-gl@2.6.1/dist/maplibre-gl.css"
-  rel="stylesheet"
-/>
+<meta charset="UTF-8">
+<title>Live Device Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-  body, html { margin: 0; padding: 0; height: 100%; }
-  #map { width: 100%; height: 100%; }
+  html, body, #map { margin: 0; padding: 0; height: 100%; width: 100%; }
   .marker {
-    background-color: purple;
     width: 20px;
     height: 20px;
     border-radius: 50%;
+    background-color: purple;
     border: 2px solid white;
     text-align: center;
     line-height: 20px;
     color: white;
+    font-size: 10px;
     font-weight: bold;
-    font-size: 12px;
   }
 </style>
+<link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
 </head>
 <body>
 <div id="map"></div>
-
 <script>
-  // Load MapLibre map using a valid OSM style JSON
-  const map = new maplibregl.Map({
-    container: 'map',
-    style: 'https://demotiles.maplibre.org/style.json', // ✅ valid style
-    center: [0, 0],
-    zoom: 2
-  });
-
-  const markers = {};
-  const MAX_AGE_MS = 10000;
-
-  const evtSource = new EventSource("/stream");
-  evtSource.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    const now = Date.now();
-
-    // Remove old markers
-    for (const id in markers) {
-      if (now - markers[id].lastUpdated > MAX_AGE_MS) {
-        markers[id].marker.remove();
-        delete markers[id];
+const map = new maplibregl.Map({
+  container: 'map',
+  style: {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256
       }
+    },
+    layers: [{
+      id: 'osm-layer',
+      type: 'raster',
+      source: 'osm'
+    }]
+  },
+  center: [0, 0],
+  zoom: 2
+});
+
+// Store markers for devices
+const markers = {};
+
+// Connect to server via SSE
+const evtSource = new EventSource('/stream');
+evtSource.onmessage = function(event) {
+  const devices = JSON.parse(event.data);
+
+  // Remove markers for devices that disappeared
+  for (let id in markers) {
+    if (!devices[id]) {
+      markers[id].remove();
+      delete markers[id];
     }
+  }
 
-    // Add/update markers
-    for (const id in data) {
-      const dev = data[id];
-      if (!dev.lat || !dev.lon) continue;
+  // Add/update markers
+  for (let id in devices) {
+    const dev = devices[id];
+    const coords = [dev.lon, dev.lat];
+    if (!coords[0] || !coords[1]) continue;
 
-      if (!markers[id]) {
-        const el = document.createElement('div');
-        el.className = 'marker';
-        el.textContent = dev.name || id;
-
-        const marker = new maplibregl.Marker(el)
-          .setLngLat([dev.lon, dev.lat])
-          .addTo(map);
-
-        markers[id] = { marker, lastUpdated: now };
-      } else {
-        markers[id].marker.setLngLat([dev.lon, dev.lat]);
-        markers[id].lastUpdated = now;
-      }
+    let marker = markers[id];
+    if (!marker) {
+      const el = document.createElement('div');
+      el.className = 'marker';
+      el.innerText = dev.name[0] || id[0]; // First letter as label
+      marker = new maplibregl.Marker(el)
+        .setLngLat(coords)
+        .addTo(map);
+      markers[id] = marker;
+    } else {
+      marker.setLngLat(coords);
     }
-  };
+  }
+};
 </script>
 </body>
 </html>
