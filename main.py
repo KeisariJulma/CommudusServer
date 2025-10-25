@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, render_template
 import time
 import json
 
@@ -49,7 +49,8 @@ def stream():
 
 @app.route("/map")
 def show_map():
-    return "Server running"
+    return render_template("map.html")  # See below
+
 
 if __name__ == "__main__":
     print("🌍 Real-Time GPS server running...")
