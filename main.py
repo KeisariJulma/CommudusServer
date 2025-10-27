@@ -72,18 +72,22 @@ TILEMATRIXSET = "WebMercatorQuad"
 FORMAT = "image/png"
 
 def xyz_to_wmts(z, x, y):
+    # WMTS WebMercatorQuad y = (2^z - 1) - y
+    tile_row = (2 ** z - 1) - y
+    tile_col = x
     return {
         "SERVICE": "WMTS",
         "REQUEST": "GetTile",
         "VERSION": "1.0.0",
-        "LAYER": LAYER,
-        "TILEMATRIXSET": TILEMATRIXSET,
+        "LAYER": "maastokartta_3857",
+        "TILEMATRIXSET": "WebMercatorQuad",
         "TileMatrix": str(z),
-        "TileRow": str(y),
-        "TileCol": str(x),
-        "FORMAT": FORMAT,
+        "TileRow": str(tile_row),
+        "TileCol": str(tile_col),
+        "FORMAT": "image/png",
         "api-key": MML_API_KEY,
     }
+
 
 @app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
 def proxy_tile(z, x, y):
