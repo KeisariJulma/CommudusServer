@@ -1,20 +1,18 @@
-from flask import Flask, request, jsonify, render_template, Response
+from flask import Flask, request, jsonify, render_template, Response, send_file
 import time
 import json
+import requests
+from io import BytesIO
 
 app = Flask(__name__)
 
-# Time in seconds after which a device is considered stale
+# --- Device tracking ---
 DEVICE_TIMEOUT = 30
-
-# Store devices: key = device name
 devices = {}
 
 @app.route("/location", methods=["POST"])
 def receive_location():
     data = request.json or {}
-
-    # Print all incoming data for debugging
     print(f"[RECEIVED] {data}")
 
     name = data.get("name")
@@ -22,8 +20,6 @@ def receive_location():
         return jsonify({"status": "ERROR", "message": "Missing device name"}), 400
 
     timestamp = time.time()
-
-    # Use device name as ID
     devices[name] = {
         "id": name,
         "lat": data.get("latitude") or data.get("lat"),
@@ -48,15 +44,13 @@ def stream():
         while True:
             current_time = time.time()
 
-            # Remove stale devices continuously
+            # Remove stale devices
             stale = [n for n, info in devices.items() if current_time - info["timestamp"] > DEVICE_TIMEOUT]
             for n in stale:
                 print(f"[STREAM] Removing stale: {n}")
                 devices.pop(n)
 
             current_state = json.dumps(devices)
-
-            # Only send new state
             if current_state != last_state:
                 last_state = current_state
                 print(f"[STREAM] Sending: {current_state}")
@@ -70,6 +64,35 @@ def stream():
 def show_map():
     return render_template("map.html")
 
+# --- MML WMTS → XYZ tile proxy ---
+MML_API_KEY = "4cbea972-9a49-4c45-a1d0-0f2046f81ff0"
+WMTS_URL = "https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
+LAYER = "maastokartta_3857"
+TILEMATRIXSET = "WebMercatorQuad"
+FORMAT = "image/png"
+
+def xyz_to_wmts(z, x, y):
+    return {
+        "SERVICE": "WMTS",
+        "REQUEST": "GetTile",
+        "VERSION": "1.0.0",
+        "LAYER": LAYER,
+        "TILEMATRIXSET": TILEMATRIXSET,
+        "TileMatrix": str(z),
+        "TileRow": str(y),
+        "TileCol": str(x),
+        "FORMAT": FORMAT,
+        "api-key": MML_API_KEY,
+    }
+
+@app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
+def proxy_tile(z, x, y):
+    params = xyz_to_wmts(z, x, y)
+    r = requests.get(WMTS_URL, params=params)
+    if r.status_code != 200:
+        return "Tile not found", 404
+    return send_file(BytesIO(r.content), mimetype="image/png")
+
 if __name__ == "__main__":
-    print("🌍 GPS server running: multiple devices supported by name")
+    print("🌍 GPS + tile proxy server running")
     app.run(host="0.0.0.0", port=5000, debug=True)
