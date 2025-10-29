@@ -7,7 +7,7 @@ import json
 
 app = Flask(__name__)
 
-MML_API_KEY = "4cbea972-9a49-4c45-a1d0-0f2046f81ff0"
+MML_API_KEY = "6ca6d0d1-33bb-4cf4-8840-f6da4874929d"
 WMTS_URL = "https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
 LAYER = "maastokartta"
 TILEMATRIXSET = "ETRS-TM35FIN"
