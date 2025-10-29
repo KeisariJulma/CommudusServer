@@ -32,7 +32,8 @@ def xyz_to_wmts(z, x, y):
 
 @app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
 def proxy_tile(z, x, y):
-    tile_row = (2 ** z - 1) - y
+    # REMOVE Y inversion
+    tile_row = y
     tile_col = x
     wmts_url = (
         f"https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
@@ -46,6 +47,7 @@ def proxy_tile(z, x, y):
     if r.status_code != 200:
         return "Tile not found", 404
     return send_file(BytesIO(r.content), mimetype="image/png")
+
 
 
 @app.route("/")
