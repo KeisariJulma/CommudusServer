@@ -1,63 +1,12 @@
-from flask import Flask, request, jsonify, Response, send_file
-import time
-import json
+from flask import Flask, send_file
 import requests
 from io import BytesIO
+from PIL import Image
+import time
+import json
 
 app = Flask(__name__)
 
-# ----------------------
-# Device tracking
-# ----------------------
-DEVICE_TIMEOUT = 30
-devices = {}
-
-@app.route("/location", methods=["POST"])
-def receive_location():
-    data = request.json or {}
-    name = data.get("name")
-    if not name:
-        return jsonify({"status": "ERROR", "message": "Missing device name"}), 400
-
-    timestamp = time.time()
-    devices[name] = {
-        "id": name,
-        "lat": data.get("latitude") or data.get("lat"),
-        "lon": data.get("longitude") or data.get("lon"),
-        "heading": data.get("heading"),
-        "timestamp": timestamp,
-        "name": name
-    }
-
-    # Remove stale devices
-    stale = [n for n, info in devices.items() if timestamp - info["timestamp"] > DEVICE_TIMEOUT]
-    for n in stale:
-        devices.pop(n)
-
-    return jsonify({"status": "OK"})
-
-@app.route("/stream")
-def stream():
-    def event_stream():
-        last_state = ""
-        while True:
-            current_time = time.time()
-            # Remove stale devices
-            stale = [n for n, info in devices.items() if current_time - info["timestamp"] > DEVICE_TIMEOUT]
-            for n in stale:
-                devices.pop(n)
-
-            current_state = json.dumps(devices)
-            if current_state != last_state:
-                last_state = current_state
-                yield f"data: {current_state}\n\n"
-
-            time.sleep(1)
-    return Response(event_stream(), mimetype="text/event-stream")
-
-# ----------------------
-# ETRS-TM35FIN tile proxy
-# ----------------------
 MML_API_KEY = "4cbea972-9a49-4c45-a1d0-0f2046f81ff0"
 WMTS_URL = "https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
 LAYER = "maastokartta"
@@ -65,11 +14,7 @@ TILEMATRIXSET = "ETRS-TM35FIN"
 FORMAT = "image/png"
 
 def xyz_to_wmts(z, x, y):
-    """
-    Converts MapLibreGL XYZ tile coordinates to WMTS TileMatrix/TileRow/TileCol.
-    ETRS-TM35FIN uses a standard matrix where y is inverted from TMS.
-    """
-    # Invert y for WMTS (TMS → WMTS)
+    # Invert Y for WMTS (TMS → WMTS)
     tile_row = (2 ** z - 1) - y
     tile_col = x
     return {
@@ -85,24 +30,35 @@ def xyz_to_wmts(z, x, y):
         "api-key": MML_API_KEY,
     }
 
-@app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
-def proxy_tile(z, x, y):
-    params = xyz_to_wmts(z, x, y)
-    r = requests.get(WMTS_URL, params=params)
-    if r.status_code != 200:
-        return "Tile not found", 404
-    return send_file(BytesIO(r.content), mimetype="image/png")
+@app.route("/tiles512/<int:z>/<int:x>/<int:y>.png")
+def proxy_tile_512(z, x, y):
+    """Combine 4 256x256 tiles into a single 512x512 tile."""
+    tiles = []
+    for dy in (0, 1):
+        row = []
+        for dx in (0, 1):
+            params = xyz_to_wmts(z + 1, x * 2 + dx, y * 2 + dy)
+            r = requests.get(WMTS_URL, params=params, timeout=5)
+            if r.status_code == 200:
+                row.append(Image.open(BytesIO(r.content)))
+            else:
+                row.append(Image.new("RGBA", (256, 256), (255, 255, 255, 0)))
+        tiles.append(row)
 
-# ----------------------
-# Optional: map page
-# ----------------------
-@app.route("/map")
-def show_map():
-    return "<h1>ETRS-TM35FIN Map Tile Proxy</h1>"
+    big = Image.new("RGBA", (512, 512))
+    for j, row in enumerate(tiles):
+        for i, img in enumerate(row):
+            big.paste(img, (i * 256, j * 256))
 
-# ----------------------
-# Run server
-# ----------------------
+    bio = BytesIO()
+    big.save(bio, format="PNG")
+    bio.seek(0)
+    return send_file(bio, mimetype="image/png")
+
+@app.route("/")
+def home():
+    return "<h3>✅ MML WMTS 512×512 Tile Proxy is running!</h3>"
+
 if __name__ == "__main__":
-    print("🌍 GPS + ETRS-TM35FIN tile proxy server running")
+    print("🚀 Running high-resolution MML proxy on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, debug=True)
