@@ -30,30 +30,23 @@ def xyz_to_wmts(z, x, y):
         "api-key": MML_API_KEY,
     }
 
-@app.route("/tiles512/<int:z>/<int:x>/<int:y>.png")
-def proxy_tile_512(z, x, y):
-    """Combine 4 256x256 tiles into a single 512x512 tile."""
-    tiles = []
-    for dy in (0, 1):
-        row = []
-        for dx in (0, 1):
-            params = xyz_to_wmts(z + 1, x * 2 + dx, y * 2 + dy)
-            r = requests.get(WMTS_URL, params=params, timeout=5)
-            if r.status_code == 200:
-                row.append(Image.open(BytesIO(r.content)))
-            else:
-                row.append(Image.new("RGBA", (256, 256), (255, 255, 255, 0)))
-        tiles.append(row)
+@app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
+def proxy_tile(z, x, y):
+    tile_row = (2 ** z - 1) - y
+    tile_col = x
+    wmts_url = (
+        f"https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
+        f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+        f"&LAYER=maastokartta&TILEMATRIXSET=ETRS-TM35FIN"
+        f"&TileMatrix={z}&TileRow={tile_row}&TileCol={tile_col}"
+        f"&FORMAT=image/png&api-key=6ca6d0d1-33bb-4cf4-8840-f6da4874929d"
+    )
 
-    big = Image.new("RGBA", (512, 512))
-    for j, row in enumerate(tiles):
-        for i, img in enumerate(row):
-            big.paste(img, (i * 256, j * 256))
+    r = requests.get(wmts_url)
+    if r.status_code != 200:
+        return "Tile not found", 404
+    return send_file(BytesIO(r.content), mimetype="image/png")
 
-    bio = BytesIO()
-    big.save(bio, format="PNG")
-    bio.seek(0)
-    return send_file(bio, mimetype="image/png")
 
 @app.route("/")
 def home():
