@@ -1,9 +1,6 @@
-from flask import Flask, send_file
+from flask import Flask, send_file, jsonify
 import requests
 from io import BytesIO
-from PIL import Image
-import time
-import json
 
 app = Flask(__name__)
 
@@ -13,46 +10,55 @@ LAYER = "maastokartta"
 TILEMATRIXSET = "ETRS-TM35FIN"
 FORMAT = "image/png"
 
-def xyz_to_wmts(z, x, y):
-    # Invert Y for WMTS (TMS → WMTS)
-    tile_row = (2 ** z - 1) - y
-    tile_col = x
-    return {
-        "SERVICE": "WMTS",
-        "REQUEST": "GetTile",
-        "VERSION": "1.0.0",
-        "LAYER": LAYER,
-        "TILEMATRIXSET": TILEMATRIXSET,
-        "TileMatrix": str(z),
-        "TileRow": str(tile_row),
-        "TileCol": str(tile_col),
-        "FORMAT": FORMAT,
-        "api-key": MML_API_KEY,
-    }
+
+def wmts_tile_url(z, x, y):
+    """Return the full WMTS URL for the given tile coordinates."""
+    return (
+        f"{WMTS_URL}"
+        f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
+        f"&LAYER={LAYER}&TILEMATRIXSET={TILEMATRIXSET}"
+        f"&TileMatrix={z}&TileRow={y}&TileCol={x}"
+        f"&FORMAT={FORMAT}&api-key={MML_API_KEY}"
+    )
+
 
 @app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
 def proxy_tile(z, x, y):
-    # REMOVE Y inversion
-    tile_row = y
-    tile_col = x
-    wmts_url = (
-        f"https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
-        f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
-        f"&LAYER=maastokartta&TILEMATRIXSET=ETRS-TM35FIN"
-        f"&TileMatrix={z}&TileRow={tile_row}&TileCol={tile_col}"
-        f"&FORMAT=image/png&api-key=6ca6d0d1-33bb-4cf4-8840-f6da4874929d"
-    )
-
-    r = requests.get(wmts_url)
-    if r.status_code != 200:
+    try:
+        url = wmts_tile_url(z, x, y)
+        print(f"Fetching tile: {url}")
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return send_file(BytesIO(r.content), mimetype="image/png")
+    except requests.RequestException as e:
+        print(f"Error fetching tile {z}/{x}/{y}: {e}")
         return "Tile not found", 404
-    return send_file(BytesIO(r.content), mimetype="image/png")
-
 
 
 @app.route("/")
 def home():
     return "<h3>✅ MML WMTS 512×512 Tile Proxy is running!</h3>"
+
+
+@app.route("/test-tiles")
+def test_tiles():
+    """Return a JSON list of sample tile URLs for testing in a map."""
+    sample_tiles = []
+    zoom_levels = [0, 5, 6]
+    coords = [
+        (0, 0),
+        (12, 10),  # Approx. southern Finland at z=5
+        (24, 16),  # Finland central at z=6
+    ]
+    for z, (x, y) in zip(zoom_levels, coords):
+        sample_tiles.append({
+            "z": z,
+            "x": x,
+            "y": y,
+            "url": f"http://localhost:5000/tiles/{z}/{x}/{y}.png"
+        })
+    return jsonify(sample_tiles)
+
 
 if __name__ == "__main__":
     print("🚀 Running high-resolution MML proxy on http://0.0.0.0:5000")
