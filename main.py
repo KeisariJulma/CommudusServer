@@ -4,6 +4,7 @@ from io import BytesIO
 
 app = Flask(__name__)
 
+# --- MML WMTS configuration ---
 MML_API_KEY = "6ca6d0d1-33bb-4cf4-8840-f6da4874929d"
 WMTS_URL = "https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
 LAYER = "maastokartta"
@@ -11,7 +12,7 @@ TILEMATRIXSET = "ETRS-TM35FIN"
 FORMAT = "image/png"
 
 
-def wmts_tile_url(z, x, y):
+def wmts_tile_url(z: int, x: int, y: int) -> str:
     """Return the full WMTS URL for the given tile coordinates."""
     return (
         f"{WMTS_URL}"
@@ -23,7 +24,8 @@ def wmts_tile_url(z, x, y):
 
 
 @app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
-def proxy_tile(z, x, y):
+def proxy_tile(z: int, x: int, y: int):
+    """Fetch a tile from MML WMTS and return it."""
     try:
         url = wmts_tile_url(z, x, y)
         print(f"Fetching tile: {url}")
@@ -42,21 +44,17 @@ def home():
 
 @app.route("/test-tiles")
 def test_tiles():
-    """Return a JSON list of sample tile URLs for testing in a map."""
-    sample_tiles = []
-    zoom_levels = [0, 5, 6]
-    coords = [
-        (0, 0),
-        (12, 10),  # Approx. southern Finland at z=5
-        (24, 16),  # Finland central at z=6
+    """Return a JSON list of sample tile URLs for testing."""
+    # Sample zoom levels and coordinates
+    sample_coords = [
+        (0, 0, 0),      # Zoom 0
+        (5, 12, 10),    # Zoom 5 (southern Finland approx.)
+        (6, 24, 16),    # Zoom 6 (central Finland approx.)
     ]
-    for z, (x, y) in zip(zoom_levels, coords):
-        sample_tiles.append({
-            "z": z,
-            "x": x,
-            "y": y,
-            "url": f"http://localhost:5000/tiles/{z}/{x}/{y}.png"
-        })
+    sample_tiles = [
+        {"z": z, "x": x, "y": y, "url": f"http://localhost:5000/tiles/{z}/{x}/{y}.png"}
+        for z, x, y in sample_coords
+    ]
     return jsonify(sample_tiles)
 
 
