@@ -1,95 +1,92 @@
-from flask import Flask, send_file, request
+from flask import Flask, send_file
+import os
+import math
 import requests
-from io import BytesIO
-import rasterio
-from rasterio.warp import calculate_default_transform, reproject, Resampling
-import numpy as np
-from pyproj import Transformer
 
 app = Flask(__name__)
 
-MML_API_KEY = "6ca6d0d1-33bb-4cf4-8840-f6da4874929d"
-WMTS_URL = "https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts"
-LAYER = "maastokartta"
-TILEMATRIXSET = "ETRS-TM35FIN"
-FORMAT = "image/png"
+# ---------------- Configuration ----------------
+CACHE_DIR = "cached_tiles"  # folder to store tiles
+API_KEY = "5f712d8a0bf7423a8b220414c9ac2b91"
 
-# Initialize the coordinate transformer (WGS84 to ETRS-TM35FIN)
-transformer = Transformer.from_crs("EPSG:4326", "EPSG:3067", always_xy=True)
+# Bounding box for pre-caching (lat/lon)
+MIN_LAT, MIN_LON = 59.5, 19.0  # southwest corner
+MAX_LAT, MAX_LON = 70.1, 31.5  # northeast corner
 
-def wmts_tile_url(z, x, y):
-    return (
-        f"{WMTS_URL}"
-        f"?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
-        f"&LAYER={LAYER}&TILEMATRIXSET={TILEMATRIXSET}"
-        f"&TileMatrix={z}&TileRow={y}&TileCol={x}"
-        f"&FORMAT={FORMAT}&api-key={MML_API_KEY}"
-    )
+# Zoom levels to pre-cache
+ZOOM_LEVELS = [10, 11, 12, 13]  # adjust as needed
 
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+# ---------------- Helper Functions ----------------
+def latlon_to_tile(lat, lon, zoom):
+    """Convert latitude/longitude to tile numbers"""
+    lat_rad = math.radians(lat)
+    n = 2.0 ** zoom
+    xtile = int((lon + 180.0) / 360.0 * n)
+    ytile = int((1.0 - math.log(math.tan(lat_rad) + 1 / math.cos(lat_rad)) / math.pi) / 2.0 * n)
+    return xtile, ytile
+
+
+def download_tile(z, x, y):
+    tile_path = os.path.join(CACHE_DIR, str(z), str(x), f"{y}.png")
+    os.makedirs(os.path.dirname(tile_path), exist_ok=True)
+    if os.path.exists(tile_path):
+        return  # already cached
+
+    url = f"https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey={API_KEY}"
+    response = requests.get(url, stream=True)
+    if response.status_code == 200:
+        with open(tile_path, "wb") as f:
+            for chunk in response.iter_content(1024):
+                f.write(chunk)
+        print(f"Downloaded tile {z}/{x}/{y}")
+    else:
+        print(f"Failed to download tile {z}/{x}/{y}")
+
+
+def precache_region():
+    """Pre-download all tiles in the bounding box for specified zoom levels"""
+    for z in ZOOM_LEVELS:
+        x_min, y_max = latlon_to_tile(MIN_LAT, MIN_LON, z)
+        x_max, y_min = latlon_to_tile(MAX_LAT, MAX_LON, z)
+
+        print(f"Pre-caching zoom {z}, X: {x_min}-{x_max}, Y: {y_min}-{y_max}")
+
+        for x in range(x_min, x_max + 1):
+            for y in range(y_min, y_max + 1):
+                download_tile(z, x, y)
+
+    print("Pre-caching complete!")
+
+
+# ---------------- Flask Route ----------------
 @app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
-def proxy_tile(z, x, y):
-    try:
-        r = requests.get(wmts_tile_url(z, x, y), timeout=10)
-        r.raise_for_status()
-        tile_bytes = BytesIO(r.content)
+def get_tile(z, x, y):
+    # Local cache path
+    tile_path = os.path.join(CACHE_DIR, str(z), str(x), f"{y}.png")
+    os.makedirs(os.path.dirname(tile_path), exist_ok=True)
 
-        # Reproject tile from ETRS-TM35FIN (EPSG:3067) -> WGS84 (EPSG:3857)
-        with rasterio.MemoryFile(tile_bytes) as memfile:
-            with memfile.open() as src:
-                transform, width, height = calculate_default_transform(
-                    src.crs, "EPSG:3857", src.width, src.height, *src.bounds
-                )
-                kwargs = src.meta.copy()
-                kwargs.update({
-                    "crs": "EPSG:3857",
-                    "transform": transform,
-                    "width": width,
-                    "height": height
-                })
+    # If tile is cached, return it
+    if os.path.exists(tile_path):
+        return send_file(tile_path, mimetype="image/png")
 
-                dst_array = np.empty((src.count, height, width), dtype=src.dtypes[0])
-                for i in range(1, src.count + 1):
-                    reproject(
-                        source=rasterio.band(src, i),
-                        destination=dst_array[i - 1],
-                        src_transform=src.transform,
-                        src_crs=src.crs,
-                        dst_transform=transform,
-                        dst_crs="EPSG:3857",
-                        resampling=Resampling.bilinear
-                    )
-
-        # Convert the reprojected array back to PNG
-        from PIL import Image
-        img = Image.fromarray(dst_array.transpose(1, 2, 0))
-        out_bytes = BytesIO()
-        img.save(out_bytes, format="PNG")
-        out_bytes.seek(0)
-
-        return send_file(out_bytes, mimetype="image/png")
-
-    except Exception as e:
-        print(f"Error: {e}")
+    # Otherwise, fetch from Thunderforest and cache it
+    url = f"https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey={API_KEY}"
+    response = requests.get(url, stream=True)
+    if response.status_code == 200:
+        with open(tile_path, "wb") as f:
+            for chunk in response.iter_content(1024):
+                f.write(chunk)
+        return send_file(tile_path, mimetype="image/png")
+    else:
         return "Tile not found", 404
 
-@app.route("/transform", methods=["POST"])
-def transform_coordinates():
-    data = request.json
-    latitude = data.get("latitude")
-    longitude = data.get("longitude")
-    if latitude is None or longitude is None:
-        return {"error": "Missing latitude or longitude"}, 400
 
-    try:
-        x, y = transformer.transform(longitude, latitude)
-        return {"x": x, "y": y}
-    except Exception as e:
-        print(f"Transformation error: {e}")
-        return {"error": "Transformation failed"}, 500
-
-@app.route("/")
-def home():
-    return "<h3>✅ MML WMTS Tile Proxy with WGS84 Reprojection and Coordinate Transformation running!</h3>"
-
+# ---------------- Main ----------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    print("Starting pre-cache...")
+    precache_region()  # Pre-download tiles on startup
+    print("Starting Flask server...")
+    app.run(host="0.0.0.0", port=5000)
