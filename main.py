@@ -1,23 +1,20 @@
-from flask import Flask, send_file
+from flask import Flask, send_file, request
 import os
 import math
 import requests
+import threading
 
 app = Flask(__name__)
 
 # ---------------- Configuration ----------------
-CACHE_DIR = "cached_tiles"  # folder to store tiles
+CACHE_DIR = "cached_tiles"
 API_KEY = "5f712d8a0bf7423a8b220414c9ac2b91"
 
-# Bounding box for pre-caching (lat/lon)
-MIN_LAT, MIN_LON = 59.5, 19.0  # southwest corner
-MAX_LAT, MAX_LON = 70.1, 31.5  # northeast corner
-
-# Zoom levels to pre-cache
-ZOOM_LEVELS = [10, 11, 12, 13]  # adjust as needed
+# Default zoom levels to pre-cache around user
+ZOOM_LEVELS = [13, 14]  # adjust as needed
+RADIUS_KM = 5  # radius around user to pre-cache tiles
 
 os.makedirs(CACHE_DIR, exist_ok=True)
-
 
 # ---------------- Helper Functions ----------------
 def latlon_to_tile(lat, lon, zoom):
@@ -27,7 +24,6 @@ def latlon_to_tile(lat, lon, zoom):
     xtile = int((lon + 180.0) / 360.0 * n)
     ytile = int((1.0 - math.log(math.tan(lat_rad) + 1 / math.cos(lat_rad)) / math.pi) / 2.0 * n)
     return xtile, ytile
-
 
 def download_tile(z, x, y):
     tile_path = os.path.join(CACHE_DIR, str(z), str(x), f"{y}.png")
@@ -45,30 +41,43 @@ def download_tile(z, x, y):
     else:
         print(f"Failed to download tile {z}/{x}/{y}")
 
+def get_bounding_box(lat, lon, radius_km=RADIUS_KM):
+    """Approximate bounding box in degrees around a point"""
+    delta_deg = radius_km / 111  # ~1 deg = 111 km
+    min_lat = lat - delta_deg
+    max_lat = lat + delta_deg
+    min_lon = lon - delta_deg
+    max_lon = lon + delta_deg
+    return min_lat, min_lon, max_lat, max_lon
 
-def precache_region():
-    """Pre-download all tiles in the bounding box for specified zoom levels"""
-    for z in ZOOM_LEVELS:
-        x_min, y_max = latlon_to_tile(MIN_LAT, MIN_LON, z)
-        x_max, y_min = latlon_to_tile(MAX_LAT, MAX_LON, z)
-
-        print(f"Pre-caching zoom {z}, X: {x_min}-{x_max}, Y: {y_min}-{y_max}")
-
+def precache_around(lat, lon, zoom_levels=ZOOM_LEVELS, radius_km=RADIUS_KM):
+    min_lat, min_lon, max_lat, max_lon = get_bounding_box(lat, lon, radius_km)
+    for z in zoom_levels:
+        x_min, y_max = latlon_to_tile(min_lat, min_lon, z)
+        x_max, y_min = latlon_to_tile(max_lat, max_lon, z)
         for x in range(x_min, x_max + 1):
             for y in range(y_min, y_max + 1):
                 download_tile(z, x, y)
 
-    print("Pre-caching complete!")
-
+def precache_async(lat, lon):
+    """Run pre-cache in a background thread"""
+    thread = threading.Thread(target=precache_around, args=(lat, lon))
+    thread.start()
 
 # ---------------- Flask Route ----------------
 @app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
 def get_tile(z, x, y):
-    # Local cache path
+    # Optional: user location via query string
+    user_lat = request.args.get("lat", type=float)
+    user_lon = request.args.get("lon", type=float)
+
+    # Start pre-caching around user in background
+    if user_lat is not None and user_lon is not None:
+        precache_async(user_lat, user_lon)
+
+    # Serve cached tile if exists
     tile_path = os.path.join(CACHE_DIR, str(z), str(x), f"{y}.png")
     os.makedirs(os.path.dirname(tile_path), exist_ok=True)
-
-    # If tile is cached, return it
     if os.path.exists(tile_path):
         return send_file(tile_path, mimetype="image/png")
 
@@ -83,10 +92,7 @@ def get_tile(z, x, y):
     else:
         return "Tile not found", 404
 
-
 # ---------------- Main ----------------
 if __name__ == "__main__":
-    print("Starting pre-cache...")
-    precache_region()  # Pre-download tiles on startup
-    print("Starting Flask server...")
+    print("Starting Flask tile server...")
     app.run(host="0.0.0.0", port=5000)
