@@ -9,11 +9,12 @@ app = Flask(__name__)
 devices = {}
 lock = Lock()  # thread-safe access for SSE
 
+# Timeout in seconds: if no update in this time, remove device
+DEVICE_TIMEOUT = 30
+
 @app.route("/location", methods=["POST"])
 def receive_location():
-    """
-    Regular location update from device.
-    """
+    """Regular location update from device."""
     data = request.json or {}
     name = data.get("name")
     if not name:
@@ -35,9 +36,7 @@ def receive_location():
 
 @app.route("/location/stop", methods=["POST"])
 def stop_sharing():
-    """
-    Device explicitly stops sharing location.
-    """
+    """Device explicitly stops sharing location."""
     data = request.json or {}
     name = data.get("name")
     if not name:
@@ -53,13 +52,18 @@ def stop_sharing():
 
 @app.route("/stream")
 def stream():
-    """
-    SSE stream of device locations.
-    """
+    """SSE stream of device locations, auto-remove inactive devices."""
     def event_stream():
         last_state = ""
         while True:
+            now = time.time()
             with lock:
+                # Remove inactive devices
+                to_remove = [name for name, dev in devices.items() if now - dev["timestamp"] > DEVICE_TIMEOUT]
+                for name in to_remove:
+                    print(f"[TIMEOUT] Device {name} removed from map (inactive)")
+                    devices.pop(name)
+
                 current_state = json.dumps(devices)
 
             # Only send new state
