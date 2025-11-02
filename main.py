@@ -1,98 +1,75 @@
-from flask import Flask, send_file, request
-import os
-import math
-import requests
-import threading
+from flask import Flask, request, jsonify, render_template, Response
+import time
+import json
 
 app = Flask(__name__)
 
-# ---------------- Configuration ----------------
-CACHE_DIR = "cached_tiles"
-API_KEY = "5f712d8a0bf7423a8b220414c9ac2b91"
+# Time in seconds after which a device is considered stale
+DEVICE_TIMEOUT = 30
 
-# Default zoom levels to pre-cache around user
-ZOOM_LEVELS = [13, 14]  # adjust as needed
-RADIUS_KM = 5  # radius around user to pre-cache tiles
+# Store devices: key = device name
+devices = {}
 
-os.makedirs(CACHE_DIR, exist_ok=True)
+@app.route("/location", methods=["POST"])
+def receive_location():
+    data = request.json or {}
 
-# ---------------- Helper Functions ----------------
-def latlon_to_tile(lat, lon, zoom):
-    """Convert latitude/longitude to tile numbers"""
-    lat_rad = math.radians(lat)
-    n = 2.0 ** zoom
-    xtile = int((lon + 180.0) / 360.0 * n)
-    ytile = int((1.0 - math.log(math.tan(lat_rad) + 1 / math.cos(lat_rad)) / math.pi) / 2.0 * n)
-    return xtile, ytile
+    # Print all incoming data for debugging
+    print(f"[RECEIVED] {data}")
 
-def download_tile(z, x, y):
-    tile_path = os.path.join(CACHE_DIR, str(z), str(x), f"{y}.png")
-    os.makedirs(os.path.dirname(tile_path), exist_ok=True)
-    if os.path.exists(tile_path):
-        return  # already cached
+    name = data.get("name")
+    if not name:
+        return jsonify({"status": "ERROR", "message": "Missing device name"}), 400
 
-    url = f"https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey={API_KEY}"
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        with open(tile_path, "wb") as f:
-            for chunk in response.iter_content(1024):
-                f.write(chunk)
-        print(f"Downloaded tile {z}/{x}/{y}")
-    else:
-        print(f"Failed to download tile {z}/{x}/{y}")
+    timestamp = time.time()
 
-def get_bounding_box(lat, lon, radius_km=RADIUS_KM):
-    """Approximate bounding box in degrees around a point"""
-    delta_deg = radius_km / 111  # ~1 deg = 111 km
-    min_lat = lat - delta_deg
-    max_lat = lat + delta_deg
-    min_lon = lon - delta_deg
-    max_lon = lon + delta_deg
-    return min_lat, min_lon, max_lat, max_lon
+    # Use device name as ID
+    devices[name] = {
+        "id": name,
+        "lat": data.get("latitude") or data.get("lat"),
+        "lon": data.get("longitude") or data.get("lon"),
+        "heading": data.get("heading"),
+        "timestamp": timestamp,
+        "name": name
+    }
 
-def precache_around(lat, lon, zoom_levels=ZOOM_LEVELS, radius_km=RADIUS_KM):
-    min_lat, min_lon, max_lat, max_lon = get_bounding_box(lat, lon, radius_km)
-    for z in zoom_levels:
-        x_min, y_max = latlon_to_tile(min_lat, min_lon, z)
-        x_max, y_min = latlon_to_tile(max_lat, max_lon, z)
-        for x in range(x_min, x_max + 1):
-            for y in range(y_min, y_max + 1):
-                download_tile(z, x, y)
+    # Remove stale devices
+    stale = [n for n, info in devices.items() if timestamp - info["timestamp"] > DEVICE_TIMEOUT]
+    for n in stale:
+        print(f"[STALE] Removing: {n}")
+        devices.pop(n)
 
-def precache_async(lat, lon):
-    """Run pre-cache in a background thread"""
-    thread = threading.Thread(target=precache_around, args=(lat, lon))
-    thread.start()
+    return jsonify({"status": "OK"})
 
-# ---------------- Flask Route ----------------
-@app.route("/tiles/<int:z>/<int:x>/<int:y>.png")
-def get_tile(z, x, y):
-    # Optional: user location via query string
-    user_lat = request.args.get("lat", type=float)
-    user_lon = request.args.get("lon", type=float)
+@app.route("/stream")
+def stream():
+    def event_stream():
+        last_state = ""
+        while True:
+            current_time = time.time()
 
-    # Start pre-caching around user in background
-    if user_lat is not None and user_lon is not None:
-        precache_async(user_lat, user_lon)
+            # Remove stale devices continuously
+            stale = [n for n, info in devices.items() if current_time - info["timestamp"] > DEVICE_TIMEOUT]
+            for n in stale:
+                print(f"[STREAM] Removing stale: {n}")
+                devices.pop(n)
 
-    # Serve cached tile if exists
-    tile_path = os.path.join(CACHE_DIR, str(z), str(x), f"{y}.png")
-    os.makedirs(os.path.dirname(tile_path), exist_ok=True)
-    if os.path.exists(tile_path):
-        return send_file(tile_path, mimetype="image/png")
+            current_state = json.dumps(devices)
 
-    # Otherwise, fetch from Thunderforest and cache it
-    url = f"https://tile.thunderforest.com/outdoors/{z}/{x}/{y}.png?apikey={API_KEY}"
-    response = requests.get(url, stream=True)
-    if response.status_code == 200:
-        with open(tile_path, "wb") as f:
-            for chunk in response.iter_content(1024):
-                f.write(chunk)
-        return send_file(tile_path, mimetype="image/png")
-    else:
-        return "Tile not found", 404
+            # Only send new state
+            if current_state != last_state:
+                last_state = current_state
+                print(f"[STREAM] Sending: {current_state}")
+                yield f"data: {current_state}\n\n"
 
-# ---------------- Main ----------------
+            time.sleep(1)
+
+    return Response(event_stream(), mimetype="text/event-stream")
+
+@app.route("/map")
+def show_map():
+    return render_template("map.html")
+
 if __name__ == "__main__":
-    print("Starting Flask tile server...")
-    app.run(host="0.0.0.0", port=5000)
+    print("🌍 GPS server running: multiple devices supported by name")
+    app.run(host="0.0.0.0", port=5000, debug=True)
