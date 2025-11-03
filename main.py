@@ -186,6 +186,11 @@ def add_user_to_group():
     session.close()
     return jsonify({"status": "OK", "user": username, "group": group_name})
 
+@app.route("/groups/manage")
+def manage_groups():
+    return render_template("groups.html")
+
+
 # ----------------- Main -----------------
 if __name__ == "__main__":
     print("🌍 GPS server running: multi-group support")
