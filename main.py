@@ -261,9 +261,11 @@ def admin_required(f):
     return decorated
 
 @app.route("/groups/manage")
-@admin_required
 def manage_groups():
+    if not session.get("admin"):
+        return render_template("admin_login.html")
     return render_template("groups.html")
+
 
 # ----------------- Main -----------------
 if __name__ == "__main__":
