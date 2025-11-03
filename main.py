@@ -1,8 +1,10 @@
-from flask import Flask, request, jsonify, Response, render_template
+from flask import Flask, request, jsonify, Response, render_template, session
 import time, json
 from threading import Lock
 from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from werkzeug.security import generate_password_hash, check_password_hash
+from functools import wraps
 
 # ----------------- Database setup -----------------
 Base = declarative_base()
@@ -18,7 +20,14 @@ class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True)
+    password_hash = Column(String)
     groups = relationship("Group", secondary=user_groups, back_populates="users")
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
 class Group(Base):
     __tablename__ = "groups"
@@ -32,49 +41,109 @@ Session = sessionmaker(bind=engine)
 
 # ----------------- Flask app -----------------
 app = Flask(__name__)
+app.secret_key = "replace_this_with_a_random_secret_key"  # Change this!
 devices = {}  # In-memory device locations
 lock = Lock()
 DEVICE_TIMEOUT = 30  # seconds
 
-# ----------------- DB helper functions -----------------
-def get_or_create_user(session, name):
-    user = session.query(User).filter_by(name=name).first()
+# ----------------- Helper functions -----------------
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if "username" not in session:
+            return jsonify({"status": "ERROR", "message": "Login required"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+def get_or_create_user(session_db, name):
+    user = session_db.query(User).filter_by(name=name).first()
     if not user:
         user = User(name=name)
-        session.add(user)
-        session.commit()
+        session_db.add(user)
+        session_db.commit()
     return user
 
-def get_or_create_group(session, name):
-    group = session.query(Group).filter_by(name=name).first()
+def get_or_create_group(session_db, name):
+    group = session_db.query(Group).filter_by(name=name).first()
     if not group:
         group = Group(name=name)
-        session.add(group)
-        session.commit()
+        session_db.add(group)
+        session_db.commit()
     return group
 
-def assign_user_to_groups(session, username, group_names):
-    user = get_or_create_user(session, username)
+def assign_user_to_groups(session_db, username, group_names):
+    user = get_or_create_user(session_db, username)
     for gname in group_names:
-        group = get_or_create_group(session, gname)
+        group = get_or_create_group(session_db, gname)
         if group not in user.groups:
             user.groups.append(group)
-    session.commit()
+    session_db.commit()
 
-# ----------------- Routes -----------------
-@app.route("/location", methods=["POST"])
-def receive_location():
-    """Receive location update from a device"""
+# ----------------- Auth routes -----------------
+@app.route("/register", methods=["POST"])
+def register():
     data = request.json or {}
-    name = data.get("name")
-    groups = data.get("groups")
-    if not name or not groups:
-        return jsonify({"status": "ERROR", "message": "Missing name or groups"}), 400
+    username = data.get("username")
+    password = data.get("password")
+    password2 = data.get("password2")  # Ask for confirmation
 
-    # Store user-group info in DB
-    session = Session()
-    assign_user_to_groups(session, name, groups)
-    session.close()
+    if not username or not password or not password2:
+        return jsonify({"status": "ERROR", "message": "Missing username or password"}), 400
+
+    if password != password2:
+        return jsonify({"status": "ERROR", "message": "Passwords do not match"}), 400
+
+    session_db = Session()
+    if session_db.query(User).filter_by(name=username).first():
+        session_db.close()
+        return jsonify({"status": "ERROR", "message": "Username already exists"}), 400
+
+    user = User(name=username)
+    user.set_password(password)
+    session_db.add(user)
+    session_db.commit()
+    session_db.close()
+
+    return jsonify({"status": "OK", "message": f"User {username} registered"})
+
+
+@app.route("/login", methods=["POST"])
+def login():
+    data = request.json or {}
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"status": "ERROR", "message": "Missing username or password"}), 400
+
+    session_db = Session()
+    user = session_db.query(User).filter_by(name=username).first()
+    session_db.close()
+
+    if not user or not user.check_password(password):
+        return jsonify({"status": "ERROR", "message": "Invalid username or password"}), 401
+
+    session["username"] = username
+    return jsonify({"status": "OK", "message": f"Logged in as {username}"})
+
+@app.route("/logout")
+def logout():
+    session.pop("username", None)
+    return jsonify({"status": "OK", "message": "Logged out"})
+
+# ----------------- Location routes -----------------
+@app.route("/location", methods=["POST"])
+@login_required
+def receive_location():
+    data = request.json or {}
+    name = session["username"]
+    groups = data.get("groups")
+    if not groups:
+        return jsonify({"status": "ERROR", "message": "Missing groups"}), 400
+
+    session_db = Session()
+    assign_user_to_groups(session_db, name, groups)
+    session_db.close()
 
     timestamp = time.time()
     with lock:
@@ -91,23 +160,18 @@ def receive_location():
     return jsonify({"status": "OK"})
 
 @app.route("/location/stop", methods=["POST"])
+@login_required
 def stop_sharing():
-    """Device stops sharing location"""
-    data = request.json or {}
-    name = data.get("name")
-    if not name:
-        return jsonify({"status": "ERROR", "message": "Missing device name"}), 400
-
+    name = session["username"]
     with lock:
         if name in devices:
             devices.pop(name)
             print(f"[STOP] Device {name} removed")
-
     return jsonify({"status": "OK"})
 
 @app.route("/stream")
+@login_required
 def stream():
-    """SSE stream for a specific group"""
     group = request.args.get("group")
     if not group:
         return "Missing 'group' parameter", 400
@@ -117,12 +181,9 @@ def stream():
         while True:
             now = time.time()
             with lock:
-                # Remove inactive devices
                 to_remove = [name for name, dev in devices.items() if now - dev["timestamp"] > DEVICE_TIMEOUT]
                 for name in to_remove:
                     devices.pop(name)
-
-                # Only send devices in the requested group
                 filtered = {name: dev for name, dev in devices.items() if group in dev.get("groups", [])}
                 current_state = json.dumps(filtered)
 
@@ -134,39 +195,36 @@ def stream():
 
     return Response(event_stream(), mimetype="text/event-stream")
 
-@app.route("/map")
-def show_map():
-    """Simple map page"""
-    return render_template("map.html")
-
-# ----------------- Group Management Endpoints -----------------
+# ----------------- Group Management -----------------
 @app.route("/groups/create", methods=["POST"])
+@login_required
 def create_group():
     data = request.json or {}
     group_name = data.get("name")
     if not group_name:
         return jsonify({"status": "ERROR", "message": "Missing group name"}), 400
 
-    session = Session()
-    group = session.query(Group).filter_by(name=group_name).first()
-    if group:
-        session.close()
+    session_db = Session()
+    if session_db.query(Group).filter_by(name=group_name).first():
+        session_db.close()
         return jsonify({"status": "ERROR", "message": "Group already exists"}), 400
 
     group = Group(name=group_name)
-    session.add(group)
-    session.commit()
-    session.close()
+    session_db.add(group)
+    session_db.commit()
+    session_db.close()
     return jsonify({"status": "OK", "group": group_name})
 
 @app.route("/groups", methods=["GET"])
+@login_required
 def list_groups():
-    session = Session()
-    groups = [g.name for g in session.query(Group).all()]
-    session.close()
+    session_db = Session()
+    groups = [g.name for g in session_db.query(Group).all()]
+    session_db.close()
     return jsonify(groups)
 
 @app.route("/groups/add_user", methods=["POST"])
+@login_required
 def add_user_to_group():
     data = request.json or {}
     username = data.get("username")
@@ -175,23 +233,23 @@ def add_user_to_group():
     if not username or not group_name:
         return jsonify({"status": "ERROR", "message": "Missing username or group"}), 400
 
-    session = Session()
-    user = get_or_create_user(session, username)
-    group = get_or_create_group(session, group_name)
+    session_db = Session()
+    user = get_or_create_user(session_db, username)
+    group = get_or_create_group(session_db, group_name)
 
     if group not in user.groups:
         user.groups.append(group)
-        session.commit()
+        session_db.commit()
 
-    session.close()
+    session_db.close()
     return jsonify({"status": "OK", "user": username, "group": group_name})
 
 @app.route("/groups/manage")
+@login_required
 def manage_groups():
     return render_template("groups.html")
 
-
 # ----------------- Main -----------------
 if __name__ == "__main__":
-    print("🌍 GPS server running: multi-group support")
+    print("🌍 GPS server running: multi-group support with login")
     app.run(host="0.0.0.0", port=5000, debug=True)
