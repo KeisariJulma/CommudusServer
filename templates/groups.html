@@ -3,89 +3,65 @@
 <head>
     <meta charset="UTF-8">
     <title>Group Management</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
-        input, button { padding: 5px; margin: 5px; }
-        table { border-collapse: collapse; margin-top: 20px; width: 50%; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-    </style>
-</head>
-<body>
-    <h1>Group Management</h1>
-
-    <h2>Create New Group</h2>
-    <input type="text" id="newGroupName" placeholder="Group Name">
-    <button onclick="createGroup()">Create Group</button>
-
-    <h2>Add User to Group</h2>
-    <input type="text" id="username" placeholder="Username">
-    <input type="text" id="groupname" placeholder="Group Name">
-    <button onclick="addUserToGroup()">Add User</button>
-
-    <h2>Existing Groups</h2>
-    <table id="groupsTable">
-        <thead>
-            <tr><th>Group Name</th></tr>
-        </thead>
-        <tbody></tbody>
-    </table>
-
     <script>
-        async function fetchGroups() {
-            const res = await fetch("/groups");
-            const groups = await res.json();
-            const tbody = document.querySelector("#groupsTable tbody");
-            tbody.innerHTML = "";
+        async function loginAdmin() {
+            const password = document.getElementById("adminPassword").value;
+            const response = await fetch("/admin_login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password })
+            });
+            const data = await response.json();
+            if (data.status === "OK") {
+                document.getElementById("loginDiv").style.display = "none";
+                document.getElementById("manageDiv").style.display = "block";
+                loadGroups();
+            } else {
+                alert("Invalid password!");
+            }
+        }
+
+        async function loadGroups() {
+            const response = await fetch("/groups");
+            const groups = await response.json();
+            const list = document.getElementById("groupList");
+            list.innerHTML = "";
             groups.forEach(g => {
-                const row = document.createElement("tr");
-                row.innerHTML = `<td>${g}</td>`;
-                tbody.appendChild(row);
+                const li = document.createElement("li");
+                li.textContent = g;
+                list.appendChild(li);
             });
         }
 
         async function createGroup() {
-            const name = document.getElementById("newGroupName").value;
-            if (!name) return alert("Enter a group name");
-
-            const res = await fetch("/groups/create", {
+            const name = document.getElementById("newGroup").value;
+            const response = await fetch("/groups/create", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name })
             });
-
-            const data = await res.json();
+            const data = await response.json();
             if (data.status === "OK") {
-                alert(`Group '${name}' created`);
-                document.getElementById("newGroupName").value = "";
-                fetchGroups();
+                loadGroups();
             } else {
                 alert(data.message);
             }
         }
-
-        async function addUserToGroup() {
-            const username = document.getElementById("username").value;
-            const group = document.getElementById("groupname").value;
-            if (!username || !group) return alert("Enter both username and group");
-
-            const res = await fetch("/groups/add_user", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ username, group })
-            });
-
-            const data = await res.json();
-            if (data.status === "OK") {
-                alert(`User '${username}' added to group '${group}'`);
-                document.getElementById("username").value = "";
-                document.getElementById("groupname").value = "";
-            } else {
-                alert(data.message);
-            }
-        }
-
-        // Load groups on page load
-        fetchGroups();
     </script>
+</head>
+<body>
+    <div id="loginDiv">
+        <h2>Admin Login</h2>
+        <input type="password" id="adminPassword" placeholder="Password"/>
+        <button onclick="loginAdmin()">Login</button>
+    </div>
+
+    <div id="manageDiv" style="display:none;">
+        <h2>Group Management</h2>
+        <input type="text" id="newGroup" placeholder="New group name"/>
+        <button onclick="createGroup()">Create Group</button>
+        <h3>Existing Groups</h3>
+        <ul id="groupList"></ul>
+    </div>
 </body>
 </html>
