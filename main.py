@@ -171,20 +171,18 @@ def stop_sharing():
 @app.route("/stream")
 @login_required
 def stream():
-    group = request.args.get("group")
-    if not group:
-        return "Missing 'group' parameter", 400
-
     def event_stream():
         last_state = ""
         while True:
             now = time.time()
             with lock:
+                # Remove devices that have timed out
                 to_remove = [name for name, dev in devices.items() if now - dev["timestamp"] > DEVICE_TIMEOUT]
                 for name in to_remove:
                     devices.pop(name)
-                filtered = {name: dev for name, dev in devices.items() if group in dev.get("groups", [])}
-                current_state = json.dumps(filtered)
+
+                # Send all devices (no group filtering)
+                current_state = json.dumps(devices)
 
             if current_state != last_state:
                 last_state = current_state
@@ -193,6 +191,7 @@ def stream():
             time.sleep(1)
 
     return Response(event_stream(), mimetype="text/event-stream")
+
 
 # ----------------- Group Management -----------------
 @app.route("/groups/create", methods=["POST"])

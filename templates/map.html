@@ -21,52 +21,34 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 let markers = {};
-let selectedGroup = null;
 
-// Load groups dynamically
-fetch("/groups_json")
-  .then(res => res.json())
-  .then(groups => {
-      let select = document.getElementById("groupSelect");
-      groups.forEach(g => {
-          let option = document.createElement("option");
-          option.value = g;
-          option.text = g;
-          select.appendChild(option);
-      });
-      // Default to first group
-      if(groups.length) {
-          selectedGroup = groups[0];
-          startSSE();
-      }
-  });
+// Connect to the stream that shows everyone
+const evtSource = new EventSource("/stream");
 
-document.getElementById("groupSelect").addEventListener("change", (e) => {
-    selectedGroup = e.target.value;
-    // Clear existing markers
-    Object.values(markers).forEach(m => map.removeLayer(m));
-    markers = {};
-});
+evtSource.onmessage = function(e) {
+    let data = JSON.parse(e.data);
 
-// SSE for live updates
-function startSSE() {
-    if(!selectedGroup) return;
-    const evtSource = new EventSource(`/stream?group=${selectedGroup}`);
-    evtSource.onmessage = function(e) {
-        let data = JSON.parse(e.data);
-        for(let name in data) {
-            let dev = data[name];
-            let lat = dev.lat;
-            let lon = dev.lon;
-            if(markers[name]) {
-                markers[name].setLatLng([lat, lon]);
-            } else {
-                let marker = L.marker([lat, lon]).addTo(map).bindPopup(name);
-                markers[name] = marker;
-            }
+    // Remove markers for devices no longer active
+    for (let name in markers) {
+        if (!data[name]) {
+            map.removeLayer(markers[name]);
+            delete markers[name];
         }
     }
-}
+
+    // Update or create markers
+    for (let name in data) {
+        let dev = data[name];
+        if (!dev.lat || !dev.lon) continue;
+        if (markers[name]) {
+            markers[name].setLatLng([dev.lat, dev.lon]);
+        } else {
+            markers[name] = L.marker([dev.lat, dev.lon])
+                .addTo(map)
+                .bindPopup(`${name}<br>(${dev.lat.toFixed(4)}, ${dev.lon.toFixed(4)})`);
+        }
+    }
+};
 </script>
 </body>
 </html>
