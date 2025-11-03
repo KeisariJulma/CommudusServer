@@ -265,6 +265,9 @@ def manage_groups():
         return render_template("admin_login.html")
     return render_template("groups.html")
 
+@app.route("/map")
+def map():
+    return render_template("map.html")
 
 # ----------------- Main -----------------
 if __name__ == "__main__":
