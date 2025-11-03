@@ -84,11 +84,12 @@ def assign_user_to_groups(session_db, username, group_names):
 def register():
     data = request.json or {}
     username = data.get("username")
+    email = data.get("email")
     password = data.get("password")
-    password2 = data.get("password2")  # Ask for confirmation
+    password2 = data.get("password2")
 
-    if not username or not password or not password2:
-        return jsonify({"status": "ERROR", "message": "Missing username or password"}), 400
+    if not username or not email or not password or not password2:
+        return jsonify({"status": "ERROR", "message": "Missing username, email or password"}), 400
 
     if password != password2:
         return jsonify({"status": "ERROR", "message": "Passwords do not match"}), 400
@@ -97,14 +98,18 @@ def register():
     if session_db.query(User).filter_by(name=username).first():
         session_db.close()
         return jsonify({"status": "ERROR", "message": "Username already exists"}), 400
+    if session_db.query(User).filter_by(email=email).first():
+        session_db.close()
+        return jsonify({"status": "ERROR", "message": "Email already registered"}), 400
 
-    user = User(name=username)
+    user = User(name=username, email=email)
     user.set_password(password)
     session_db.add(user)
     session_db.commit()
     session_db.close()
 
     return jsonify({"status": "OK", "message": f"User {username} registered"})
+
 
 
 @app.route("/login", methods=["POST"])
