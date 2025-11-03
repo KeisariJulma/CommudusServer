@@ -6,6 +6,8 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 
+from sqlalchemy.ext.declarative import declarative_base
+
 # ----------------- Database setup -----------------
 Base = declarative_base()
 
@@ -16,12 +18,16 @@ user_groups = Table(
     Column("group_id", ForeignKey("groups.id"), primary_key=True)
 )
 
+
+Base = declarative_base()
+
 class User(Base):
     __tablename__ = "users"
+
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True)
-    password_hash = Column(String)
-    groups = relationship("Group", secondary=user_groups, back_populates="users")
+    name = Column(String, unique=True, nullable=False)
+    email = Column(String, unique=True, nullable=False)  # new email column
+    password_hash = Column(String, nullable=False)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -83,24 +89,22 @@ def assign_user_to_groups(session_db, username, group_names):
 @app.route("/register", methods=["POST"])
 def register():
     data = request.json or {}
-    username = data.get("username")
-    email = data.get("email")
+    username = data.get("name")       # from frontend
+    email = data.get("email")         # from frontend
     password = data.get("password")
-    password2 = data.get("password2")
+    confirm_password = data.get("confirmPassword")  # from frontend
 
-    if not username or not email or not password or not password2:
-        return jsonify({"status": "ERROR", "message": "Missing username, email or password"}), 400
+    if not username or not email or not password or not confirm_password:
+        return jsonify({"status": "ERROR", "message": "Missing fields"}), 400
 
-    if password != password2:
+    if password != confirm_password:
         return jsonify({"status": "ERROR", "message": "Passwords do not match"}), 400
 
     session_db = Session()
-    if session_db.query(User).filter_by(name=username).first():
+
+    if session_db.query(User).filter((User.name == username) | (User.email == email)).first():
         session_db.close()
-        return jsonify({"status": "ERROR", "message": "Username already exists"}), 400
-    if session_db.query(User).filter_by(email=email).first():
-        session_db.close()
-        return jsonify({"status": "ERROR", "message": "Email already registered"}), 400
+        return jsonify({"status": "ERROR", "message": "Username or email already exists"}), 400
 
     user = User(name=username, email=email)
     user.set_password(password)
@@ -108,28 +112,29 @@ def register():
     session_db.commit()
     session_db.close()
 
-    return jsonify({"status": "OK", "message": f"User {username} registered"})
+    return jsonify({"status": "OK", "username": username})
+
 
 
 
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json or {}
-    username = data.get("username")
+    identifier = data.get("identifier")  # can be username or email
     password = data.get("password")
 
-    if not username or not password:
-        return jsonify({"status": "ERROR", "message": "Missing username or password"}), 400
+    if not identifier or not password:
+        return jsonify({"status": "ERROR", "message": "Missing fields"}), 400
 
     session_db = Session()
-    user = session_db.query(User).filter_by(name=username).first()
+    user = session_db.query(User).filter((User.name == identifier) | (User.email == identifier)).first()
     session_db.close()
 
     if not user or not user.check_password(password):
-        return jsonify({"status": "ERROR", "message": "Invalid username or password"}), 401
+        return jsonify({"status": "ERROR", "message": "Invalid credentials"}), 400
 
-    session["username"] = username
-    return jsonify({"status": "OK", "message": f"Logged in as {username}"})
+    return jsonify({"status": "OK", "username": user.name})
+
 
 @app.route("/logout")
 def logout():
