@@ -1,15 +1,16 @@
-from flask import Flask, request, jsonify, Response, render_template, session
+from flask import Flask, request, jsonify, Response, render_template
+from flask_jwt_extended import (
+    JWTManager, create_access_token, jwt_required, get_jwt_identity
+)
 import time, json
 from threading import Lock
 from sqlalchemy import create_engine, Column, Integer, String, Table, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from werkzeug.security import generate_password_hash, check_password_hash
-from functools import wraps
 
 # ----------------- Database setup -----------------
 Base = declarative_base()
 
-# Many-to-many association table
 user_groups = Table(
     "user_groups", Base.metadata,
     Column("user_id", ForeignKey("users.id"), primary_key=True),
@@ -43,24 +44,18 @@ Session = sessionmaker(bind=engine)
 
 # ----------------- Flask app -----------------
 app = Flask(__name__)
-app.secret_key = "replace_this_with_a_random_secret_key"  # Change this!
-devices = {}  # In-memory device locations
+app.config["JWT_SECRET_KEY"] = "replace_with_a_secure_random_key"
+jwt = JWTManager(app)
+
+devices = {}
 lock = Lock()
 DEVICE_TIMEOUT = 30  # seconds
 
 # ----------------- Helper functions -----------------
-def login_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if "username" not in session:
-            return jsonify({"status": "ERROR", "message": "Login required"}), 401
-        return f(*args, **kwargs)
-    return decorated
-
 def get_or_create_user(session_db, name):
     user = session_db.query(User).filter_by(name=name).first()
     if not user:
-        user = User(name=name, email=f"{name}@example.com")
+        user = User(name=name, email=f"{name}@example.com", password_hash="")
         session_db.add(user)
         session_db.commit()
     return user
@@ -111,33 +106,30 @@ def register():
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json or {}
-    identifier = data.get("identifier")  # username or email
+    identifier = data.get("identifier")
     password = data.get("password")
 
     if not identifier or not password:
         return jsonify({"status": "ERROR", "message": "Missing fields"}), 400
 
     session_db = Session()
-    user = session_db.query(User).filter((User.name == identifier) | (User.email == identifier)).first()
+    user = session_db.query(User).filter(
+        (User.name == identifier) | (User.email == identifier)
+    ).first()
     session_db.close()
 
     if not user or not user.check_password(password):
         return jsonify({"status": "ERROR", "message": "Invalid credentials"}), 400
 
-    session["username"] = user.name
-    return jsonify({"status": "OK", "username": user.name})
-
-@app.route("/logout")
-def logout():
-    session.pop("username", None)
-    return jsonify({"status": "OK", "message": "Logged out"})
+    access_token = create_access_token(identity=user.name)
+    return jsonify({"status": "OK", "username": user.name, "token": access_token})
 
 # ----------------- Location routes -----------------
 @app.route("/location", methods=["POST"])
-@login_required
+@jwt_required()
 def receive_location():
     data = request.json or {}
-    name = session["username"]
+    name = get_jwt_identity()
     groups = data.get("groups")
     if not groups:
         return jsonify({"status": "ERROR", "message": "Missing groups"}), 400
@@ -161,27 +153,25 @@ def receive_location():
     return jsonify({"status": "OK"})
 
 @app.route("/location/stop", methods=["POST"])
-@login_required
+@jwt_required()
 def stop_sharing():
-    name = session["username"]
+    name = get_jwt_identity()
     with lock:
         devices.pop(name, None)
     return jsonify({"status": "OK"})
 
 @app.route("/stream")
-@login_required
+@jwt_required()
 def stream():
     def event_stream():
         last_state = ""
         while True:
             now = time.time()
             with lock:
-                # Remove devices that have timed out
                 to_remove = [name for name, dev in devices.items() if now - dev["timestamp"] > DEVICE_TIMEOUT]
                 for name in to_remove:
                     devices.pop(name)
 
-                # Send all devices (no group filtering)
                 current_state = json.dumps(devices)
 
             if current_state != last_state:
@@ -192,10 +182,9 @@ def stream():
 
     return Response(event_stream(), mimetype="text/event-stream")
 
-
 # ----------------- Group Management -----------------
 @app.route("/groups/create", methods=["POST"])
-@login_required
+@jwt_required()
 def create_group():
     data = request.json or {}
     group_name = data.get("name")
@@ -214,7 +203,7 @@ def create_group():
     return jsonify({"status": "OK", "group": group_name})
 
 @app.route("/groups", methods=["GET"])
-@login_required
+@jwt_required()
 def list_groups():
     session_db = Session()
     groups = [g.name for g in session_db.query(Group).all()]
@@ -222,7 +211,7 @@ def list_groups():
     return jsonify(groups)
 
 @app.route("/groups/add_user", methods=["POST"])
-@login_required
+@jwt_required()
 def add_user_to_group():
     data = request.json or {}
     username = data.get("username")
@@ -239,37 +228,12 @@ def add_user_to_group():
     session_db.close()
     return jsonify({"status": "OK", "user": username, "group": group_name})
 
-ADMIN_PASSWORD_HASH = generate_password_hash("Heino")  # replace with your admin password
-
-@app.route("/admin_login", methods=["POST"])
-def admin_login():
-    data = request.json or {}
-    password = data.get("password")
-    if not password or not check_password_hash(ADMIN_PASSWORD_HASH, password):
-        return jsonify({"status": "ERROR", "message": "Invalid password"})
-    session["admin"] = True
-    return jsonify({"status": "OK"})
-
-
-def admin_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get("admin"):
-            return "Admin login required", 401
-        return f(*args, **kwargs)
-    return decorated
-
-@app.route("/groups/manage")
-def manage_groups():
-    if not session.get("admin"):
-        return render_template("admin_login.html")
-    return render_template("groups.html")
-
+# ----------------- Frontend pages -----------------
 @app.route("/map")
 def map():
     return render_template("map.html")
 
 # ----------------- Main -----------------
 if __name__ == "__main__":
-    print("🌍 GPS server running: multi-group support with login")
+    print("🌍 GPS server running with JWT authentication")
     app.run(host="0.0.0.0", port=5000, debug=True)
