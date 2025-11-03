@@ -6,8 +6,6 @@ from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 
-from sqlalchemy.ext.declarative import declarative_base
-
 # ----------------- Database setup -----------------
 Base = declarative_base()
 
@@ -18,16 +16,14 @@ user_groups = Table(
     Column("group_id", ForeignKey("groups.id"), primary_key=True)
 )
 
-
-Base = declarative_base()
-
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False)
-    email = Column(String, unique=True, nullable=False)  # new email column
+    email = Column(String, unique=True, nullable=False)
     password_hash = Column(String, nullable=False)
+
+    groups = relationship("Group", secondary=user_groups, back_populates="users")
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -64,7 +60,7 @@ def login_required(f):
 def get_or_create_user(session_db, name):
     user = session_db.query(User).filter_by(name=name).first()
     if not user:
-        user = User(name=name)
+        user = User(name=name, email=f"{name}@example.com")
         session_db.add(user)
         session_db.commit()
     return user
@@ -89,19 +85,17 @@ def assign_user_to_groups(session_db, username, group_names):
 @app.route("/register", methods=["POST"])
 def register():
     data = request.json or {}
-    username = data.get("name")       # from frontend
-    email = data.get("email")         # from frontend
+    username = data.get("name")
+    email = data.get("email")
     password = data.get("password")
-    confirm_password = data.get("confirmPassword")  # from frontend
+    confirm_password = data.get("confirmPassword")
 
     if not username or not email or not password or not confirm_password:
         return jsonify({"status": "ERROR", "message": "Missing fields"}), 400
-
     if password != confirm_password:
         return jsonify({"status": "ERROR", "message": "Passwords do not match"}), 400
 
     session_db = Session()
-
     if session_db.query(User).filter((User.name == username) | (User.email == email)).first():
         session_db.close()
         return jsonify({"status": "ERROR", "message": "Username or email already exists"}), 400
@@ -114,13 +108,10 @@ def register():
 
     return jsonify({"status": "OK", "username": username})
 
-
-
-
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json or {}
-    identifier = data.get("identifier")  # can be username or email
+    identifier = data.get("identifier")  # username or email
     password = data.get("password")
 
     if not identifier or not password:
@@ -133,8 +124,8 @@ def login():
     if not user or not user.check_password(password):
         return jsonify({"status": "ERROR", "message": "Invalid credentials"}), 400
 
+    session["username"] = user.name
     return jsonify({"status": "OK", "username": user.name})
-
 
 @app.route("/logout")
 def logout():
@@ -174,9 +165,7 @@ def receive_location():
 def stop_sharing():
     name = session["username"]
     with lock:
-        if name in devices:
-            devices.pop(name)
-            print(f"[STOP] Device {name} removed")
+        devices.pop(name, None)
     return jsonify({"status": "OK"})
 
 @app.route("/stream")
@@ -239,18 +228,15 @@ def add_user_to_group():
     data = request.json or {}
     username = data.get("username")
     group_name = data.get("group")
-
     if not username or not group_name:
         return jsonify({"status": "ERROR", "message": "Missing username or group"}), 400
 
     session_db = Session()
     user = get_or_create_user(session_db, username)
     group = get_or_create_group(session_db, group_name)
-
     if group not in user.groups:
         user.groups.append(group)
         session_db.commit()
-
     session_db.close()
     return jsonify({"status": "OK", "user": username, "group": group_name})
 
