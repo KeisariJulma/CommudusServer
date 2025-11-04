@@ -1,54 +1,74 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>GPS Map</title>
-<style>
-  #map { height: 80vh; width: 100%; }
-</style>
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <meta charset="UTF-8">
+  <title>GPS Map</title>
+  <style>
+    #map { height: 80vh; width: 100%; }
+  </style>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 </head>
 <body>
-<h2>GPS Map</h2>
-<select id="groupSelect"></select>
-<div id="map"></div>
+  <h2>GPS Map</h2>
+  <select id="groupSelect"></select>
+  <div id="map"></div>
 
-<script>
-let map = L.map('map').setView([0, 0], 2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors'
-}).addTo(map);
+  <script>
+    // --- Initialize Leaflet ---
+    const map = L.map('map').setView([0, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
 
-let markers = {};
+    const markers = {};
 
-// Connect to the stream that shows everyone
-const evtSource = new EventSource("/stream");
+    // --- Get JWT token ---
+    const params = new URLSearchParams(window.location.search);
+    let token = params.get('token');
 
-evtSource.onmessage = function(e) {
-    let data = JSON.parse(e.data);
+    if (!token) {
+      token = localStorage.getItem('jwt_token');
+    }
 
-    // Remove markers for devices no longer active
-    for (let name in markers) {
-        if (!data[name]) {
+    if (!token) {
+      alert('❌ No JWT token found. Please log in first.');
+    } else {
+      console.log('🔑 Using JWT token for /stream');
+
+      // --- Connect to /stream with token ---
+      const evtSource = new EventSource(`/stream?token=${token}`);
+
+      evtSource.onmessage = function(e) {
+        const data = JSON.parse(e.data);
+
+        // Remove stale markers
+        for (const name in markers) {
+          if (!data[name]) {
             map.removeLayer(markers[name]);
             delete markers[name];
+          }
         }
-    }
 
-    // Update or create markers
-    for (let name in data) {
-        let dev = data[name];
-        if (!dev.lat || !dev.lon) continue;
-        if (markers[name]) {
+        // Update or create markers
+        for (const name in data) {
+          const dev = data[name];
+          if (!dev.lat || !dev.lon) continue;
+
+          if (markers[name]) {
             markers[name].setLatLng([dev.lat, dev.lon]);
-        } else {
+          } else {
             markers[name] = L.marker([dev.lat, dev.lon])
-                .addTo(map)
-                .bindPopup(`${name}<br>(${dev.lat.toFixed(4)}, ${dev.lon.toFixed(4)})`);
+              .addTo(map)
+              .bindPopup(`${dev.name}<br>(${dev.lat.toFixed(4)}, ${dev.lon.toFixed(4)})`);
+          }
         }
+      };
+
+      evtSource.onerror = (err) => {
+        console.error('🚫 SSE connection error', err);
+      };
     }
-};
-</script>
+  </script>
 </body>
 </html>

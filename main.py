@@ -160,9 +160,20 @@ def stop_sharing():
         devices.pop(name, None)
     return jsonify({"status": "OK"})
 
+
 @app.route("/stream")
-@jwt_required()
 def stream():
+    token = request.args.get("token")
+    if not token:
+        return jsonify({"msg": "Missing token"}), 401
+
+    try:
+        decoded = decode_token(token)
+    except Exception:
+        return jsonify({"msg": "Invalid token"}), 401
+
+    user = decoded.get("sub")
+
     def event_stream():
         last_state = ""
         while True:
@@ -180,6 +191,7 @@ def stream():
 
             time.sleep(1)
 
+    print(f"✅ Stream opened for {user}")
     return Response(event_stream(), mimetype="text/event-stream")
 
 # ----------------- Group Management -----------------
